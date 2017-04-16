@@ -1,5 +1,5 @@
 import os, sys, traceback, pdb
-from atomate.vasp.database import MMVaspDb
+from atomate.vasp.database import VaspCalcDb
 from monty.serialization import loadfn
 from pymatgen import vis
 
@@ -14,7 +14,7 @@ def get_db(fworker_filename=None):
         fworker = loadfn(os.path.join(os.path.dirname(fw_config), "my_fworker.yaml"))
     else:
         fworker = loadfn(fworker_filename)
-    db_file = MMVaspDb.from_db_file(fworker["env"]["db_file"])
+    db_file = VaspCalcDb.from_db_file(fworker["env"]["db_file"])
     return db_file.db
 
 
@@ -27,11 +27,19 @@ def get_colors(key="Jmol"):
     color_dict = {el:[j / 256. for j in colors[key][el]] for el in colors[key].keys()}
     return color_dict
 
-if __name__=="__main__":
+def pdb_function(function, *args, **kwargs):
+    """
+    This is a function that will attempt to execute another function
+    and invoke the debugger if that function's execution produces
+    an error
+    """
     try:
-        db = get_db()
-        colors = get_colors()
+        function(*args, **kwargs)
     except:
         type, value, tb = sys.exc_info()
         traceback.print_exc()
         pdb.post_mortem(tb)
+    print "Successful"
+
+if __name__=="__main__":
+    pdb_function(get_db)
