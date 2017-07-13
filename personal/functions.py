@@ -2,6 +2,8 @@ import os, sys, traceback, pdb
 from atomate.vasp.database import VaspCalcDb
 from monty.serialization import loadfn
 from pymatgen import vis
+from pymatgen.io.ase import AseAtomsAdaptor
+from ase.visualize import view
 
 def get_db(fworker_filename=None):
     """
@@ -40,6 +42,17 @@ def pdb_function(function, *args, **kwargs):
         traceback.print_exc()
         pdb.post_mortem(tb)
     print "Successful"
+
+
+def pymatview(struct):
+    """
+    Helper function to use ase-gui with pymatgen structure
+    """
+    aaa = AseAtomsAdaptor()
+    if isinstance(struct, list):
+        view([aaa.get_atoms(s) for s in struct])
+    else:
+        view(aaa.get_atoms(struct))
 
 if __name__=="__main__":
     pdb_function(get_db)
