@@ -1,3 +1,9 @@
+"""
+A function dump for stuff I find useful, often
+to be reorganized into external modules later
+if prudent
+"""
+
 import os, sys, traceback, pdb
 from atomate.vasp.database import VaspCalcDb
 from monty.serialization import loadfn
@@ -18,7 +24,6 @@ def get_db(fworker_filename=None):
         fworker = loadfn(fworker_filename)
     db_file = VaspCalcDb.from_db_file(fworker["env"]["db_file"])
     return db_file.db
-
 
 def get_colors(key="Jmol"):
     """
@@ -42,7 +47,6 @@ def pdb_function(function, *args, **kwargs):
         traceback.print_exc()
         pdb.post_mortem(tb)
     print "Successful"
-
 
 def pymatview(struct):
     """
