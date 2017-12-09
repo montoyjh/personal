@@ -6,6 +6,7 @@ from pymatgen.util.testing import PymatgenTest
 
 # Note: you have to supply your own materials collection file
 db_filename = 'materials.yaml'
+lpad_filename = 'my_launchpad.yaml'
 
 class ElasticTransitionTest(PymatgenTest):
     def setUp(self):
@@ -14,9 +15,14 @@ class ElasticTransitionTest(PymatgenTest):
 
     def test_get_structures(self):
         structures = get_structures(self.materials_store, limit=100)
-        blargh
 
     def test_generate_workflow(self):
         si = self.get_structure("Si")
         structure = generate_workflow(si)
-        blargh
+
+    def test_defuse_workflows(self):
+        si = self.get_structure("Si")
+        wf = generate_workflow(si, tags='mp-149')
+        lpad = LaunchPad.from_file(lpad_file)
+        lpad.add_wf(wf)
+        defuse_wflows_with_elasticity_data(self.materials_store, lpad)
