@@ -26,6 +26,7 @@ from fireworks import LaunchPad
 import numpy as np
 import tqdm
 import logging
+import os
 from multiprocessing import Pool
 
 logger = logging.getLogger(__name__)
@@ -122,17 +123,19 @@ def defuse_wflows_with_elasticity_data(materials_store, lpad=None):
         logger.info("Defusing wf with wf_id {} and mp_id {}".format(wf_id, mpid))
 
 if __name__ == "__main__":
-    materials_store = MongoStore.from_db_file("tests/materials.yaml")
+    mat_file = os.path.join(os.path.dirname(__file__), 'tests', 'materials.yaml')
+    fw_file = os.path.join(os.path.dirname(__file__), 'tests', 'my_launchpad.yaml')
+    materials_store = MongoStore.from_db_file(mat_file)
     materials_store.connect()
-    lpad = LaunchPad.from_file("tests/my_launchpad.yaml")
+    lpad = LaunchPad.from_file(fw_file)
     lpad.reset(password='', require_password=False, max_reset_wo_password=101)
     # still testing so limit to 100 docs
-    structures_by_mpid = get_structures(materials_store, limit=100)
+    structures_by_mpid = get_structures(materials_store)
     parallel = True
     if parallel:
         gwf_args = [(structure, [mpid, 'production_elastic']) 
                     for mpid, structure in structures_by_mpid.items()]
-        pool = Pool(7)
+        pool = Pool(31)
         wfs = list(tqdm.tqdm(pool.imap_unordered(pgenerate_workflow, gwf_args), 
                                                  total=len(gwf_args)))
         pool.close()
@@ -140,7 +143,6 @@ if __name__ == "__main__":
         wfs = [generate_workflow(structure, tags=[mpid, 'production_elastic'])
                for mpid, structure in tqdm.tqdm(structures_by_mpid.items())]
 
-    import nose; nose.tools.set_trace()
-    #for wf in wfs:
-    #    lpad.add_wf(wf)
+    for wf in tqdm.tqdm(wfs):
+        lpad.add_wf(wf)
     defuse_wflows_with_elasticity_data(materials_store, lpad)
