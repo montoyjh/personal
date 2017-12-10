@@ -122,6 +122,11 @@ def defuse_wflows_with_elasticity_data(materials_store, lpad=None):
         lpad.defuse_wf(wf_id)
         logger.info("Defusing wf with wf_id {} and mp_id {}".format(wf_id, mpid))
 
+def set_priority(lpad):
+    lpad.fireworks.update_many({"spec.elastic_category": "minimal"}, {"$set": {"spec._priority": 2000}})
+    lpad.fireworks.update_many({"spec.elastic_category": "minimal_full_stencil"},
+                               {"$set": {"spec._priority": 1000}})
+
 if __name__ == "__main__":
     mat_file = os.path.join(os.path.dirname(__file__), 'tests', 'materials.yaml')
     fw_file = os.path.join(os.path.dirname(__file__), 'tests', 'my_launchpad.yaml')
@@ -130,7 +135,8 @@ if __name__ == "__main__":
     lpad = LaunchPad.from_file(fw_file)
     lpad.reset(password='', require_password=False, max_reset_wo_password=101)
     # still testing so limit to 100 docs
-    structures_by_mpid = get_structures(materials_store)
+    limit = None
+    structures_by_mpid = get_structures(materials_store, limit=limit)
     parallel = True
     if parallel:
         gwf_args = [(structure, [mpid, 'production_elastic']) 
@@ -146,3 +152,4 @@ if __name__ == "__main__":
     for wf in tqdm.tqdm(wfs):
         lpad.add_wf(wf)
     defuse_wflows_with_elasticity_data(materials_store, lpad)
+    set_priority(lpad)
