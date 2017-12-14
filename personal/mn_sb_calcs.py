@@ -2,6 +2,11 @@
 Script that generates the necessary calculations for collaboration
 with John Gregoire.  Specifically, multiphase orderings of the
 Mn-Sb chemical system.
+
+Notes:
+    - originally tried to make this work for every intermediate composition
+        which got crazy fast, so limited it to substitutions of single atoms
+        for neighboring compositions (up to 2)
 """
 
 from pymatgen import MPRester
@@ -20,11 +25,10 @@ def get_orderings(template, compositions=None):
     Args:
         Composition
     """
-    if not compositions: 
-        red = template.composition.reduced_composition.get_el_amt_dict()
-        total = red['Mn'] + red['Sb']
-        step = 1 / (8 - 8 % total)
-        compositions = [{"Mn": x, "Sb": 1-x} for x in  np.arange(0, 1.01, step)]
+    comp = template.composition.reduced_composition.get_el_amt_dict()
+    total = red['Mn'] + red['Sb']
+    step = 1 / (8 - 8 % total)
+    compositions = [{"Mn": x, "Sb": 1-x} for x in  np.arange(0, 1.01, step)]
 
     structures = []
     for composition in compositions:
@@ -52,20 +56,30 @@ def order_structure(structure, composition):
     do it in a standard way?
     """
     # find minimum supercell for at least 8 sites
+    if not sum(composition.values) == structure.num_sites:
+        Composition(composition)
     this_structure = structure.copy()
     elamt = structure.composition.get_el_amt_dict()
-    total = elamt['Mn'] + elamt['Sb']
+    p = composition['Mn'] - elamt['Mn']
+    # Apologies to my future self and anyone who has to read this code
+    if p > 0:
+        subs_elt = ['Mn']
+        repl_elt = ['Sb']
+    else:
+        subs_elt = ['Sb']
+        repl_elt = ['Mn']
     if total < 8:
         this_structure.make_supercell([2]*3)
         total *= 8
+    # Find all possible substitution sites
     indices = [structure.index(site) for site in structure 
-               if site.species_string in ['Mn', 'Sb']]
-    combos = list(itertools.combinations(indices, int(len(indices) * composition['Mn'])))
+               if site.species_string == subs_elt]
+    combos = list(itertools.combinations(indices, abs(p)))
     unique_structures = []
     structure_matcher = StructureMatcher()
     name = '{} - {}'.format(structure.formula, composition)
     unique_structs = []
-    # import pdb; pdb.set_trace()
+    import pdb; pdb.set_trace()
     for combo in tqdm.tqdm(combos, desc='enumeration of {}'.format(name)):
         new_struct = this_structure.copy()
         mn_sites = combo
