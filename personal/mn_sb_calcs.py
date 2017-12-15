@@ -10,98 +10,73 @@ Notes:
 """
 
 from pymatgen import MPRester
-from pymatgen.transformations.advanced_transformations import EnumerateStructureTransformation 
 from pymatgen.analysis.structure_matcher import StructureMatcher
 import tqdm
 import itertools
-import numpy as np
+from atomate.vasp.workflows.presets.core import wf_structure_optimization,\
+    wf_static
+from atomate.vasp.powerups import add_tags, add_modify_incar
+from fireworks import LaunchPad
+import sys
 
 mpr = MPRester()
 
-def get_orderings(template, compositions=None):
+def get_structures_by_template(template, perturbations=1):
     """
-    Gets ordered structures from a template and a substitution
+    This takes a template, finds all structures with a composition
+    with up to n fewer Mn atoms (replaced by Sb) and up to n fewer Sb atoms
+    (replaced by Mn).
 
     Args:
-        Composition
+        template (Structure): template structure
+        perturbations (int): number of atoms to make substitutions
+            for relative to the template composition
     """
     comp = template.composition.reduced_composition.get_el_amt_dict()
-    total = red['Mn'] + red['Sb']
-    step = 1 / (8 - 8 % total)
-    compositions = [{"Mn": x, "Sb": 1-x} for x in  np.arange(0, 1.01, step)]
-
-    structures = []
-    for composition in compositions:
-        structures.extend(order_structure(template, composition))
-        """
-        structure = template.copy()
-        structure.replace_species({"Mn": composition, "Sb": composition})
-        if structure.is_ordered:
-            structures.append(structure)
-        else:
-            # import pdb; pdb.set_trace()
-            est = EnumerateStructureTransformation(refine_structure=True, max_cell_size=8)
-            structures.extend(est.apply_transformation(structure))
-        """
-    return structures
-
-def get_all_structs_by_material_id(mp_ids):
-    return {mpid: get_orderings(mpr.get_structure_by_material_id(mpid))
-            for mpid in tqdm.tqdm(mp_ids)}
-
-
-def order_structure(structure, composition):
-    """
-    Enumlib doesn't seem to work, so maybe just
-    do it in a standard way?
-    """
-    # find minimum supercell for at least 8 sites
-    if not sum(composition.values) == structure.num_sites:
-        Composition(composition)
-    this_structure = structure.copy()
-    elamt = structure.composition.get_el_amt_dict()
-    p = composition['Mn'] - elamt['Mn']
-    # Apologies to my future self and anyone who has to read this code
-    if p > 0:
-        subs_elt = ['Mn']
-        repl_elt = ['Sb']
-    else:
-        subs_elt = ['Sb']
-        repl_elt = ['Mn']
-    if total < 8:
-        this_structure.make_supercell([2]*3)
-        total *= 8
-    # Find all possible substitution sites
-    indices = [structure.index(site) for site in structure 
-               if site.species_string == subs_elt]
-    combos = list(itertools.combinations(indices, abs(p)))
-    unique_structures = []
-    structure_matcher = StructureMatcher()
-    name = '{} - {}'.format(structure.formula, composition)
+    all_structures = []
+    for elt, sub in ['Mn', 'Sb'], ['Sb', 'Mn']:
+        # I'm sure there's a more elegant way to do this, sorry to future self
+        if elt in comp:
+            indices = [template.index(site) for site in template
+                       if site.species_string==elt]
+            for n in range(perturbations+1):
+                combos = itertools.combinations(indices, n)
+                for combo in list(combos):
+                    new_structure = template.copy()
+                    for idx in combo:
+                        new_structure[idx] = sub
+                        all_structures.append(new_structure)
     unique_structs = []
-    import pdb; pdb.set_trace()
-    for combo in tqdm.tqdm(combos, desc='enumeration of {}'.format(name)):
-        new_struct = this_structure.copy()
-        mn_sites = combo
-        sb_sites = list(set(indices) - set(combo)) 
-        for si in mn_sites:
-            new_struct[si] = 'Mn'
-        for si in sb_sites:
-            new_struct[si] = 'Sb'
-        # Check if in unique list or not
+    structure_matcher = StructureMatcher()
+    for new_struct in tqdm.tqdm(all_structures, desc='reducing structures'):
         if not any([structure_matcher.fit(new_struct, struct) for struct in unique_structs]):
             unique_structs.append(new_struct)
+    assert len(set([s.composition for s in unique_structs])) < 2 * n + 1
     return unique_structs
 
+def get_all_structs_by_material_id(mp_ids):
+    return {mpid[0]: get_structures_by_template(
+        mpr.get_structure_by_material_id(mpid[0]), mpid[1])
+            for mpid in tqdm.tqdm(mp_ids)}
+
 if __name__=="__main__":
-    structures = get_all_structs_by_material_id(["mp-19231", 
-                                                 "mp-25043", 
-                                                 "mp-565203",
-                                                 "mp-18759",
-                                                 "mp-19006",
-                                                 "mp-19395",
-                                                 "mp-2136",
-                                                 "mp-1705",
-                                                 "mp-230"])
-    print("\n".join("{}: {}".format(k, len(v)) for k, v in structures.items()))
-    import pdb; pdb.set_trace()
+    structures = get_all_structs_by_material_id([("mp-19231", 2),
+                                                 ("mp-25043", 2),
+                                                 ("mp-565203",1),
+                                                 ("mp-18759", 2),
+                                                 ("mp-19006", 2),
+                                                 ("mp-19395", 2),
+                                                 ("mp-2136",  2),
+                                                 ("mp-1705",  2),
+                                                 ("mp-230", 2)])
+    # all_structures = itertools.chain.from_iterable(structures.values())
+    lpad = LaunchPad.from_file(sys.argv[1])
+    for mpid, structures in structures.items():
+        for structure in structures:
+            wf = wf_structure_optimization(structure)
+            wf.append_wf(wf_static(structure), wf.leaf_fw_ids)
+            wf = add_modify_incar(wf)
+            wf = add_tags(wf, ["mn_sb_calcs", mpid[0]])
+            lpad.add_wf(wf)
+    # print("\n".join("{}: {}".format(k, len(v)) for k, v in structures.items()))
+    # import pdb; pdb.set_trace()
