@@ -17,6 +17,9 @@ from atomate.vasp.workflows.presets.core import wf_structure_optimization,\
     wf_static
 from atomate.vasp.powerups import add_tags, add_modify_incar
 from fireworks import LaunchPad
+from pymatgen.command_line.bader_caller import *
+from maggma.stores import MongoStore
+
 import sys
 
 mpr = MPRester()
@@ -69,31 +72,45 @@ def get_wf(structure, tags = None):
         wf = add_tags(wf, tags)
     return wf
 
+def add_bader():
+    test_store = MongoStore.from_db_file("test_tasks.yaml")
+    test_store.connect()
+    docs = test_store.query(['dir_name', 'task_id'], {"tags": "mn_sb_calcs_3"})
+    for doc in docs:
+        bader = bader_analysis_from_path(doc['dir_name'].split(':')[-1])
+        import pdb; pdb.set_trace()
+
+submit = False
+bader = True
+
 if __name__=="__main__":
-    structures = get_all_structs_by_material_id([("mp-19231", 2),
-                                                 ("mp-25043", 2),
-                                                 ("mp-565203",1),
-                                                 ("mp-18759", 2),
-                                                 ("mp-19006", 2),
-                                                 ("mp-19395", 2),
-                                                 ("mp-2136",  2),
-                                                 ("mp-1705",  2),
-                                                 ("mp-230", 2)])
+    if submit:
+        structures = get_all_structs_by_material_id([("mp-19231", 2),
+                                                     ("mp-25043", 2),
+                                                     ("mp-565203",1),
+                                                     ("mp-18759", 2),
+                                                     ("mp-19006", 2),
+                                                     ("mp-19395", 2),
+                                                     ("mp-2136",  2),
+                                                     ("mp-1705",  2),
+                                                     ("mp-230", 2)])
 
-    # Also get TiO2 as template
-    rutile = mpr.get_structure_by_material_id("mp-2657")
-    ti_indices = [rutile.index(s) for s in rutile if s.species_string=='Ti']
-    rutile[ti_indices[0]] = 'Mn'
-    rutile[ti_indices[1]] = 'Sb'
-    structures["mp-2657"] = get_structures_by_template(rutile, 2)
+        # Also get TiO2 as template
+        rutile = mpr.get_structure_by_material_id("mp-2657")
+        ti_indices = [rutile.index(s) for s in rutile if s.species_string=='Ti']
+        rutile[ti_indices[0]] = 'Mn'
+        rutile[ti_indices[1]] = 'Sb'
+        structures["mp-2657"] = get_structures_by_template(rutile, 2)
 
-    lpad = LaunchPad.from_file(sys.argv[1])
-    wfs = []
-    for mpid, structures in structures.items():
-        for structure in structures:
-            wfs.append(get_wf(structure, tags=["mn_sb_calcs_3", mpid]))
+        lpad = LaunchPad.from_file(sys.argv[1])
+        wfs = []
+        for mpid, structures in structures.items():
+            for structure in structures:
+                wfs.append(get_wf(structure, tags=["mn_sb_calcs_3", mpid]))
 
-    launch = True
-    if launch:
-        for wf in wfs:
-            lpad.add_wf(wf)
+        launch = True
+        if launch:
+            for wf in wfs:
+                lpad.add_wf(wf)
+    if bader:
+        add_bader()
