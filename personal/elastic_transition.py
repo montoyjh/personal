@@ -15,7 +15,7 @@ Todo:
 
 from maggma.stores import MongoStore
 from atomate.vasp.workflows.presets.core import wf_elastic_constant
-from atomate.vasp.powerups import add_tags
+from atomate.vasp.powerups import add_tags, add_modify_incar, add_priority
 from atomate.utils.utils import get_fws_and_tasks
 from pymatgen.analysis.elasticity.tensors import Tensor, SquareTensor,\
         get_tkd_value, symmetry_reduce
@@ -27,11 +27,12 @@ import numpy as np
 import tqdm
 import logging
 import os
-from multiprocessing import Pool
+from multiprocessing import Pool, cpu_count
 
 logger = logging.getLogger(__name__)
 
-def get_structures(materials_store, lu_filter=None, criteria=None, limit=None):
+def get_structures(materials_store, lu_filter=None, criteria=None,
+                   limit=None, lpad=None):
     """
     Simple function to get all structures 
 
@@ -51,6 +52,11 @@ def get_structures(materials_store, lu_filter=None, criteria=None, limit=None):
         data = data.limit(limit)
     result = {d["task_id"]: Structure.from_dict(d['structure'])
               for d in tqdm.tqdm(data, total=count)}
+    # filter
+    if lpad:
+        existing_mpids_in_lpad = lpad.fireworks.distinct("spec.tags")
+        result = {k: v for k, v in result.items() 
+                  if not k in existing_mpids_in_lpad}
     return result
 
 # Just for multiprocessing.pool.imap
@@ -100,6 +106,9 @@ def generate_workflow(structure, tags=[]):
     if tags:
         wf = add_tags(wf, tags)
 
+    wf = add_modify_incar(wf)
+    priority = 500 - structure.num_sites
+    wf = add_priority(wf, priority)
     return wf
 
 def defuse_wflows_with_elasticity_data(materials_store, lpad=None):
@@ -123,33 +132,70 @@ def defuse_wflows_with_elasticity_data(materials_store, lpad=None):
         logger.info("Defusing wf with wf_id {} and mp_id {}".format(wf_id, mpid))
 
 def set_priority(lpad):
-    lpad.fireworks.update_many({"spec.elastic_category": "minimal"}, {"$set": {"spec._priority": 2000}})
+    lpad.fireworks.update_many({"spec.elastic_category": "minimal"}, {"$inc": {"spec._priority": 2000}})
     lpad.fireworks.update_many({"spec.elastic_category": "minimal_full_stencil"},
-                               {"$set": {"spec._priority": 1000}})
+                               {"$inc": {"spec._priority": 1000}})
+    lpad.fireworks.update_many({"spec.elastic_category": "minimal", "name": {"$regex": "deformation"}},
+                               {"$inc": {"spec._priority": 1}})
+
+def chunk_iterable(iterable, chunk_size):
+    """
+    Yield successive n-sized chunks from l. Stolen from stackoverflow.
+    
+    Args:
+        iterable (iterable)
+        chunk_size (int)
+    """
+    for i in range(0, len(iterable), chunk_size):
+        yield list(iterable)[i:i + chunk_size]
+
+# Global params, should set these up with an argparser maybe
+material_filter = {"nsites": {"$lt": 5}, "elasticity.warnings": None, "elasticity": {"$ne": None}}
+limit = 10
+reset = True
+parallel = True
+defuse_existing = False
+chunk_size = 300
+
+# Files
+mat_file = os.path.join(os.path.dirname(__file__), 'tests', 'materials.yaml')
+fw_file = os.path.join(os.path.dirname(__file__), 'tests', 'my_launchpad.yaml')
+
+# Testing
+test = True
+test_mat = os.path.join(os.path.dirname(__file__), 'tests', 'test_materials.yaml')
 
 if __name__ == "__main__":
-    mat_file = os.path.join(os.path.dirname(__file__), 'tests', 'materials.yaml')
-    fw_file = os.path.join(os.path.dirname(__file__), 'tests', 'my_launchpad.yaml')
     materials_store = MongoStore.from_db_file(mat_file)
     materials_store.connect()
     lpad = LaunchPad.from_file(fw_file)
-    lpad.reset(password='', require_password=False, max_reset_wo_password=101)
-    # still testing so limit to 100 docs
-    limit = None
-    structures_by_mpid = get_structures(materials_store, limit=limit)
-    parallel = True
-    if parallel:
-        gwf_args = [(structure, [mpid, 'production_elastic']) 
-                    for mpid, structure in structures_by_mpid.items()]
-        pool = Pool(31)
-        wfs = list(tqdm.tqdm(pool.imap_unordered(pgenerate_workflow, gwf_args), 
-                                                 total=len(gwf_args)))
-        pool.close()
-    else:
-        wfs = [generate_workflow(structure, tags=[mpid, 'production_elastic'])
-               for mpid, structure in tqdm.tqdm(structures_by_mpid.items())]
-
-    for wf in tqdm.tqdm(wfs):
-        lpad.add_wf(wf)
-    defuse_wflows_with_elasticity_data(materials_store, lpad)
+    lpad.strm_level = 'WARNING'
+    if reset:
+        lpad.reset(password='', require_password=False, max_reset_wo_password=101)
+    structures_by_mpid = get_structures(materials_store, limit=limit,
+                                        lpad=lpad, criteria=material_filter)
+    chunks = chunk_iterable(structures_by_mpid.items(), chunk_size)
+    for chunk in tqdm.tqdm(chunks, total=len(structures_by_mpid) // chunk_size + 1,
+                           desc='Chunks'):
+        if parallel:
+            gwf_args = [(structure, [mpid, 'production_elastic']) 
+                        for mpid, structure in chunk] 
+            pool = Pool(cpu_count())
+            wfs = list(tqdm.tqdm(pool.imap_unordered(pgenerate_workflow, gwf_args), 
+                                                     total=len(gwf_args), desc="Generating fws"))
+            pool.close()
+        else:
+            wfs = [generate_workflow(structure, tags=[mpid, 'production_elastic'])
+                   for mpid, structure in tqdm.tqdm(chunk, desc="Generating fws")]
+        for wf in tqdm.tqdm(wfs, desc="Adding fireworks"):
+            lpad.add_wf(wf)
+    if defuse_existing:
+        defuse_wflows_with_elasticity_data(materials_store, lpad)
     set_priority(lpad)
+    if test:
+        test_materials = MongoStore.from_db_file(test_mat)
+        test_materials.connect()
+        for mpid in structures_by_mpid:
+            doc = materials_store.collection.find_one({"task_id": mpid})
+            doc['elasticity'] = None
+            test_materials.collection.update({"task_id": mpid}, doc, upsert=True)
