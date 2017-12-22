@@ -73,12 +73,19 @@ def get_wf(structure, tags = None):
     return wf
 
 def add_bader():
-    test_store = MongoStore.from_db_file("test_tasks.yaml")
+    test_store = MongoStore.from_db_file("tasks_test.json")
     test_store.connect()
-    docs = test_store.query(['dir_name', 'task_id'], {"tags": "mn_sb_calcs_3"})
-    for doc in docs:
-        bader = bader_analysis_from_path(doc['dir_name'].split(':')[-1])
-        import pdb; pdb.set_trace()
+    docs = test_store.query(['dir_name', 'task_id'], {"tags": "mn_sb_calcs_3",
+                                                      "task_label": "static", 
+                                                      "bader": {"$exists": False}})
+    for doc in tqdm.tqdm(docs, total=docs.count()):
+        run_dir = doc['dir_name'].split(':')[-1]
+        bader = BaderAnalysis.from_path(run_dir)
+        summary = bader.summary
+        oxi_structure = bader.get_oxidation_state_decorated_structure()
+        summary.update({"oxi_structure": oxi_structure.as_dict()})
+        test_store.collection.update({"task_id": doc['task_id']}, {"$set": {"bader": summary}})
+        # import pdb; pdb.set_trace()
 
 submit = False
 bader = True
