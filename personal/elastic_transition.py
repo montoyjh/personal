@@ -7,10 +7,9 @@ Main level actions:
     - Defuse fws with entries already in materials collection
         
 Todo:
-    - Put my and Wei Chen's tasks into a single database (translating to atomate schema)
-    - Build elasticity collection
     - Build elasticity into materials collection
     - Hook into propjockey
+    - update web code for getting elastic properties
 """
 
 from maggma.stores import MongoStore
