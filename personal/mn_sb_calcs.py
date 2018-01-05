@@ -16,6 +16,8 @@ import itertools
 from atomate.vasp.workflows.presets.core import wf_structure_optimization,\
     wf_static
 from atomate.vasp.powerups import add_tags, add_modify_incar
+from atomate.vasp.workflows.base.core import get_wf
+
 from fireworks import LaunchPad
 from pymatgen.command_line.bader_caller import *
 from maggma.stores import MongoStore
@@ -87,11 +89,25 @@ def add_bader():
         test_store.collection.update({"task_id": doc['task_id']}, {"$set": {"bader": summary}})
         # import pdb; pdb.set_trace()
 
-submit = False
-bader = True
+def get_high_fft_grid_wfs():
+    test_store = MongoStore.from_db_file("tasks_test.json")
+    test_store.connect()
+    docs = test_store.query(['dir_name', 'output.structure', 'task_id', 'tags'], 
+                            {"tags": "mn_sb_calcs_3", "task_label": "static"})
+    for doc in docs:
+        wf = get_wf(structure, "static_only.yaml", vis=MPStaticSet(structure, reciprocal_density=500),
+                    common_params={"vasp_cmd": ">>vasp_cmd<<", "db_file": ">>db_file<<"})
+        wf = wf_static(structure)
+        wf = add_modify_incar(wf)
+        wf = add_modify_incar(wf, {"incar_update": {"ENAUG": 5000, "PREC": "High"}})
+        wf = add_tags(wf, doc['tags'] + ['dense_grid'])
+        wfs.append(wf)
+    return wfs
+
+mode = 'high_fft'
 
 if __name__=="__main__":
-    if submit:
+    if mode == 'submit':
         structures = get_all_structs_by_material_id([("mp-19231", 2),
                                                      ("mp-25043", 2),
                                                      ("mp-565203",1),
@@ -119,5 +135,11 @@ if __name__=="__main__":
         if launch:
             for wf in wfs:
                 lpad.add_wf(wf)
-    if bader:
+    elif mode == 'do_bader':
         add_bader()
+    elif mode == 'high_fft':
+        wfs = get_high_fft_grid_wfs()
+        for wf in wfs:
+            lpad.add_wf(wf)
+    else:
+        raise ValueError("Mode {} not supported".format(mode))
