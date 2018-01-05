@@ -149,8 +149,13 @@ def chunk_iterable(iterable, chunk_size):
         yield list(iterable)[i:i + chunk_size]
 
 # Global params, should set these up with an argparser maybe
-material_filter = {"nsites": {"$lt": 5}, "elasticity.warnings": None, "elasticity": {"$ne": None}}
-limit = 10
+material_filter = None
+"""
+material_filter = {"nsites": {"$lt": 5}, 
+                   "elasticity.warnings": None, 
+                   "elasticity": {"$ne": None}}
+                   """
+limit = None
 reset = True
 parallel = True
 defuse_existing = False
@@ -161,7 +166,7 @@ mat_file = os.path.join(os.path.dirname(__file__), 'tests', 'materials.yaml')
 fw_file = os.path.join(os.path.dirname(__file__), 'tests', 'my_launchpad.yaml')
 
 # Testing
-test = True
+test = False
 test_mat = os.path.join(os.path.dirname(__file__), 'tests', 'test_materials.yaml')
 
 if __name__ == "__main__":
