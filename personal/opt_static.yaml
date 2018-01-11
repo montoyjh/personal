@@ -1,0 +1,8 @@
+fireworks:
+- fw: atomate.vasp.fireworks.core.OptimizeFW
+- fw: atomate.vasp.fireworks.core.StaticFW
+  params:
+    parents: 0
+common_params:
+   vasp_cmd: ">>vasp_cmd<<"
+   db_file: ">>db_file<<"

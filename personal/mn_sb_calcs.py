@@ -7,24 +7,28 @@ Notes:
     - originally tried to make this work for every intermediate composition
         which got crazy fast, so limited it to substitutions of single atoms
         for neighboring compositions (up to 2)
+    - an early iteration of this workflow had a bug that didn't properly
+        generate static workflows to copy vasp outputs
 """
 
-from pymatgen import MPRester
+from pymatgen import MPRester, Structure
 from pymatgen.analysis.structure_matcher import StructureMatcher
+from pymatgen.io.vasp.sets import MPStaticSet
 import tqdm
 import itertools
-from atomate.vasp.workflows.presets.core import wf_structure_optimization,\
-    wf_static
+from atomate.utils.utils import get_wf_from_spec_dict
 from atomate.vasp.powerups import add_tags, add_modify_incar
-from atomate.vasp.workflows.base.core import get_wf
+from atomate.vasp.workflows.base.core import get_wf as get_atomate_wf
 
 from fireworks import LaunchPad
 from pymatgen.command_line.bader_caller import *
 from maggma.stores import MongoStore
+from monty.serialization import loadfn
 
 import sys
 
 mpr = MPRester()
+module_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)))
 
 def get_structures_by_template(template, perturbations=1):
     """
@@ -39,17 +43,18 @@ def get_structures_by_template(template, perturbations=1):
     """
     comp = template.composition.reduced_composition.get_el_amt_dict()
     all_structures = [template]
+    subs_template = template.copy()
+    if subs_template.num_sites < 7:
+        subs_template.make_supercell([2, 2, 2])
     for elt, sub in ['Mn', 'Sb'], ['Sb', 'Mn']:
         # I'm sure there's a more elegant way to do this, sorry to future self
         if elt in comp:
-            indices = [template.index(site) for site in template
+            indices = [subs_template.index(site) for site in subs_template
                        if site.species_string==elt]
             for n in range(perturbations+1):
                 combos = itertools.combinations(indices, n)
                 for combo in list(combos):
-                    new_structure = template.copy()
-                    if new_structure.num_sites < 7:
-                        new_structure.make_supercell([2, 2, 2])
+                    new_structure = subs_template.copy()
                     for idx in combo:
                         new_structure[idx] = sub
                         all_structures.append(new_structure)
@@ -59,6 +64,14 @@ def get_structures_by_template(template, perturbations=1):
         if not any([structure_matcher.fit(new_struct, struct) for struct in unique_structs]):
             unique_structs.append(new_struct)
     assert len(set([s.composition for s in unique_structs])) <= 2 * n + 1
+
+    # ensure total mn+sb/o stoichiometry preserved
+    ratio = (sum(comp.values()) - comp['O']) / comp['O']
+    for struct in unique_structs:
+        unique_comp = struct.composition.get_el_amt_dict()
+        unique_ratio = (sum(unique_comp.values()) - unique_comp['O']) / unique_comp['O']
+        assert ratio == unique_ratio
+
     return unique_structs
 
 def get_all_structs_by_material_id(mp_ids):
@@ -66,9 +79,9 @@ def get_all_structs_by_material_id(mp_ids):
         mpr.get_structure_by_material_id(mpid[0]), mpid[1])
             for mpid in tqdm.tqdm(mp_ids)}
 
-def get_wf(structure, tags = None):
-    wf = wf_structure_optimization(structure)
-    wf.append_wf(wf_static(structure), wf.leaf_fw_ids)
+def get_opt_static_wf(structure, tags=None):
+    wf_spec = loadfn(os.path.join(module_dir, 'opt_static.yaml'))
+    wf = get_wf_from_spec_dict(structure, wf_spec)
     wf = add_modify_incar(wf)
     if tags:
         wf = add_tags(wf, tags)
@@ -94,17 +107,19 @@ def get_high_fft_grid_wfs():
     test_store.connect()
     docs = test_store.query(['dir_name', 'output.structure', 'task_id', 'tags'], 
                             {"tags": "mn_sb_calcs_3", "task_label": "static"})
+    wfs = []
     for doc in docs:
-        wf = get_wf(structure, "static_only.yaml", vis=MPStaticSet(structure, reciprocal_density=500),
+        structure = Structure.from_dict(doc['output']['structure'])
+        wf = get_atomate_wf(structure, "static_only.yaml", vis=MPStaticSet(structure, reciprocal_density=500),
                     common_params={"vasp_cmd": ">>vasp_cmd<<", "db_file": ">>db_file<<"})
-        wf = wf_static(structure)
+        # wf = wf_static(structure)
         wf = add_modify_incar(wf)
         wf = add_modify_incar(wf, {"incar_update": {"ENAUG": 5000, "PREC": "High"}})
         wf = add_tags(wf, doc['tags'] + ['dense_grid'])
         wfs.append(wf)
     return wfs
 
-mode = 'high_fft'
+mode = 'do_bader'
 
 if __name__=="__main__":
     if mode == 'submit':
@@ -129,7 +144,7 @@ if __name__=="__main__":
         wfs = []
         for mpid, structures in structures.items():
             for structure in structures:
-                wfs.append(get_wf(structure, tags=["mn_sb_calcs_3", mpid]))
+                wfs.append(get_opt_static_wf(structure, tags=["mn_sb_calcs_4", mpid]))
 
         launch = True
         if launch:
@@ -139,6 +154,7 @@ if __name__=="__main__":
         add_bader()
     elif mode == 'high_fft':
         wfs = get_high_fft_grid_wfs()
+        lpad = LaunchPad.from_file(sys.argv[1])
         for wf in wfs:
             lpad.add_wf(wf)
     else:
