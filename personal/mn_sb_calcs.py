@@ -88,9 +88,9 @@ def get_opt_static_wf(structure, tags=None):
     return wf
 
 def add_bader():
-    test_store = MongoStore.from_db_file("tasks_test.json")
+    test_store = MongoStore.from_db_file(os.path.join(module_path, "tasks.yaml"))
     test_store.connect()
-    docs = test_store.query(['dir_name', 'task_id'], {"tags": "mn_sb_calcs_3",
+    docs = test_store.query(['dir_name', 'task_id'], {"tags": "mn_sb_calcs_4",
                                                       "task_label": "static", 
                                                       "bader": {"$exists": False}})
     for doc in tqdm.tqdm(docs, total=docs.count()):
@@ -103,15 +103,16 @@ def add_bader():
         # import pdb; pdb.set_trace()
 
 def get_high_fft_grid_wfs():
-    test_store = MongoStore.from_db_file("tasks_test.json")
+    test_store = MongoStore.from_db_file("tasks.yaml")
     test_store.connect()
     docs = test_store.query(['dir_name', 'output.structure', 'task_id', 'tags'], 
-                            {"tags": "mn_sb_calcs_3", "task_label": "static"})
+                            {"tags": "mn_sb_calcs_4", "task_label": "static"})
     wfs = []
     for doc in docs:
         structure = Structure.from_dict(doc['output']['structure'])
-        wf = get_atomate_wf(structure, "static_only.yaml", vis=MPStaticSet(structure, reciprocal_density=500),
-                    common_params={"vasp_cmd": ">>vasp_cmd<<", "db_file": ">>db_file<<"})
+        wf = get_atomate_wf(structure, "static_only.yaml", vis=MPStaticSet(structure,
+                            reciprocal_density=500),
+                            common_params={"vasp_cmd": ">>vasp_cmd<<", "db_file": ">>db_file<<"})
         # wf = wf_static(structure)
         wf = add_modify_incar(wf)
         wf = add_modify_incar(wf, {"incar_update": {"ENAUG": 5000, "PREC": "High"}})
@@ -119,7 +120,7 @@ def get_high_fft_grid_wfs():
         wfs.append(wf)
     return wfs
 
-mode = 'do_bader'
+mode = 'high_fft'
 
 if __name__=="__main__":
     if mode == 'submit':
@@ -139,6 +140,11 @@ if __name__=="__main__":
         rutile[ti_indices[0]] = 'Mn'
         rutile[ti_indices[1]] = 'Sb'
         structures["mp-2657"] = get_structures_by_template(rutile, 2)
+
+        # Also get tri rutile template
+        tri_rutile = mpr.get_structure_by_material_id("mp-24845")
+        tri_rutile.replace_species({"Co": "Mn"})
+        structures['mp-24845'] = get_structures_by_template(tri_rutile, 2)
 
         lpad = LaunchPad.from_file(sys.argv[1])
         wfs = []
