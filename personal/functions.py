@@ -1,7 +1,11 @@
 import os, sys, traceback, pdb
 from atomate.vasp.database import VaspCalcDb
+from atomate.utils.utils import get_wf_from_spec_dict
+from atomate.vasp.powerups import add_modify_incar, add_tags
 from monty.serialization import loadfn
 from pymatgen import vis
+
+module_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)))
 
 def get_db(fworker_filename=None):
     """
@@ -39,7 +43,12 @@ def pdb_function(function, *args, **kwargs):
         type, value, tb = sys.exc_info()
         traceback.print_exc()
         pdb.post_mortem(tb)
-    print "Successful"
+    print("Successful")
 
-if __name__=="__main__":
-    pdb_function(get_db)
+def get_opt_static_wf(structure, tags=None):
+    wf_spec = loadfn(os.path.join(module_dir, 'opt_static.yaml'))
+    wf = get_wf_from_spec_dict(structure, wf_spec)
+    wf = add_modify_incar(wf)
+    if tags:
+        wf = add_tags(wf, tags)
+    return wf
