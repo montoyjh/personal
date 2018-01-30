@@ -90,7 +90,7 @@ def get_opt_static_wf(structure, tags=None):
 def add_bader():
     test_store = MongoStore.from_db_file("tasks_test.json")
     test_store.connect()
-    docs = test_store.query(['dir_name', 'task_id'], {"tags": "mn_sb_calcs_3",
+    docs = test_store.query(['dir_name', 'task_id'], {"tags": "mn_sb_calcs_4",
                                                       "task_label": "static", 
                                                       "bader": {"$exists": False}})
     for doc in tqdm.tqdm(docs, total=docs.count()):
