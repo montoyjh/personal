@@ -120,7 +120,8 @@ def get_high_fft_grid_wfs():
         wfs.append(wf)
     return wfs
 
-mode = 'high_fft'
+mode = 'add_3_trirutile'
+launch = True
 
 if __name__=="__main__":
     if mode == 'submit':
@@ -152,16 +153,35 @@ if __name__=="__main__":
             for structure in structures:
                 wfs.append(get_opt_static_wf(structure, tags=["mn_sb_calcs_4", mpid]))
 
-        launch = True
         if launch:
             for wf in wfs:
                 lpad.add_wf(wf)
+
+    # Lazy way of adding larger perturbation of Tri-rutile template
+    elif mode == 'add_3_trirutile':
+        tri_rutile = mpr.get_structure_by_material_id("mp-24845")
+        tri_rutile.replace_species({"Co": "Mn"})
+        new_structs = get_structures_by_template(tri_rutile, 3)
+        import nose; nose.tools.set_trace()
+        new_structs = [s for s in new_structs if s.reduced_composition == Composition()]
+
+        lpad = LaunchPad.from_file(sys.argv[1])
+        wfs = []
+        for mpid, structures in structures.items():
+            for structure in structures:
+                wfs.append(get_opt_static_wf(structure, tags=["mn_sb_calcs_4", mpid]))
+
+        if launch:
+            for wf in wfs:
+                lpad.add_wf(wf)
+
     elif mode == 'do_bader':
         add_bader()
     elif mode == 'high_fft':
         wfs = get_high_fft_grid_wfs()
         lpad = LaunchPad.from_file(sys.argv[1])
-        for wf in wfs:
-            lpad.add_wf(wf)
+        if launch:
+            for wf in wfs:
+                lpad.add_wf(wf)
     else:
         raise ValueError("Mode {} not supported".format(mode))
