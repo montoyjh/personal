@@ -1,11 +1,12 @@
 """
-This module is intended to be a temporary placeholder for my work on transitioning the elastic workflow
+This module is intended to be a temporary placeholder for my work on
+transitioning the elastic workflow
 
 Main level actions:
     - Add elastic fireworks for all materials
     - Prioritize fireworks by symmetrically distinct deformations
     - Defuse fws with entries already in materials collection
-        
+
 Todo:
     - Build elasticity into materials collection
     - Hook into propjockey
@@ -13,108 +14,26 @@ Todo:
 """
 
 from maggma.stores import MongoStore
-from atomate.vasp.workflows.presets.core import wf_elastic_constant
-from atomate.vasp.powerups import add_tags, add_modify_incar, add_priority
-from atomate.utils.utils import get_fws_and_tasks
-from pymatgen.analysis.elasticity.tensors import Tensor, SquareTensor,\
-        get_tkd_value, symmetry_reduce
-from pymatgen.analysis.elasticity.strain import Strain
-from pymatgen.core.operations import SymmOp
-from pymatgen import Structure
+from maggma.runner import Runner
+from emmet.vasp.elastic import ElasticBuilder
+from emmet.vasp.mpworks import MPWorksCompatibilityBuilder
+from emmet.materials.property_workflows import PropertyWorkflowBuilder,\
+    get_elastic_wf_builder
 from fireworks import LaunchPad
-import numpy as np
-import tqdm
 import logging
+from monty.serialization import dumpfn
 import os
-from multiprocessing import Pool, cpu_count
 
 logger = logging.getLogger(__name__)
 
-def get_structures(materials_store, lu_filter=None, criteria=None,
-                   limit=None, lpad=None):
-    """
-    Simple function to get all structures 
 
-    Args:
-        materials_store (Store): store of materials
-        lu_filter (datetime?): date past which to query for materials
-        criteria (dict) criteria to filter documents accessed from materials
-        limit (int) limit for number of documents to get, primarily for testing
-    """
-    criteria = criteria or {}
-    if lu_filter:
-        criteria.update(lu_filter)
-    # data = materials_store.collection.aggregate(pipeline).next()
-    data = materials_store.query(["structure", "task_id"], criteria)
-    count = limit or data.count()
-    if limit:
-        data = data.limit(limit)
-    result = {d["task_id"]: Structure.from_dict(d['structure'])
-              for d in tqdm.tqdm(data, total=count)}
-    # filter
-    if lpad:
-        existing_mpids_in_lpad = lpad.fireworks.distinct("spec.tags")
-        result = {k: v for k, v in result.items() 
-                  if not k in existing_mpids_in_lpad}
-    return result
 
-# Just for multiprocessing.pool.imap
-def pgenerate_workflow(input_args):
-    structure, tags = input_args
-    return generate_workflow(structure, tags)
-
-def generate_workflow(structure, tags=[]):
-    """
-    Generates a standard production workflow.
-
-    Notes:
-        Uses a primitive structure transformed into
-        the conventional basis (for equivalent deformations).
-
-        Adds the "minimal" category to the minimal portion
-        of the workflow necessary to generate the elastic tensor,
-        and the "minimal_full_stencil" category to the portion that
-        includes all of the strain stencil, but is symmetrically complete
-    """
-    # transform the structure
-    ieee_rot = Tensor.get_ieee_rotation(structure)
-    assert SquareTensor(ieee_rot).is_rotation(tol=0.005)
-    symm_op = SymmOp.from_rotation_and_translation(ieee_rot)
-    ieee_structure = structure.copy()
-    ieee_structure.apply_operation(symm_op)
-
-    # construct workflow
-    wf = wf_elastic_constant(ieee_structure)
-    
-    # Set categories, starting with optimization
-    opt_fws = get_fws_and_tasks(wf, fw_name_constraint="optimization")
-    wf.fws[opt_fws[0][0]].spec['elastic_category'] = "minimal"
-
-    # find minimal set of fireworks using symmetry reduction
-    fws_by_strain = {Strain(fw.tasks[-1]['pass_dict']['strain']): n
-                     for n, fw in enumerate(wf.fws) if 'deformation' in fw.name}
-    unique_tensors = symmetry_reduce(fws_by_strain.keys(), ieee_structure)
-    for unique_tensor in unique_tensors:
-        fw_index = get_tkd_value(fws_by_strain, unique_tensor)
-        if np.isclose(unique_tensor, 0.005).any():
-            wf.fws[fw_index].spec['elastic_category'] = "minimal"
-        else:
-            wf.fws[fw_index].spec['elastic_category'] = "minimal_full_stencil"
-            
-    # Add tags
-    if tags:
-        wf = add_tags(wf, tags)
-
-    wf = add_modify_incar(wf)
-    priority = 500 - structure.num_sites
-    wf = add_priority(wf, priority)
-    return wf
 
 def defuse_wflows_with_elasticity_data(materials_store, lpad=None):
     """
     function to defuse workflows with existing data perhaps to
     be reignited later
-    
+
     Args:
         materials_store (Store): store of materials documents
         lpad (LaunchPad): launchpad object to which to add fws,
@@ -140,7 +59,7 @@ def set_priority(lpad):
 def chunk_iterable(iterable, chunk_size):
     """
     Yield successive n-sized chunks from l. Stolen from stackoverflow.
-    
+
     Args:
         iterable (iterable)
         chunk_size (int)
@@ -169,37 +88,23 @@ fw_file = os.path.join(os.path.dirname(__file__), 'tests', 'my_launchpad.yaml')
 test = False
 test_mat = os.path.join(os.path.dirname(__file__), 'tests', 'test_materials.yaml')
 
+# Dump runner to file
 if __name__ == "__main__":
-    materials_store = MongoStore.from_db_file(mat_file)
-    materials_store.connect()
-    lpad = LaunchPad.from_file(fw_file)
-    lpad.strm_level = 'WARNING'
-    if reset:
-        lpad.reset(password='', require_password=False, max_reset_wo_password=101)
-    structures_by_mpid = get_structures(materials_store, limit=limit,
-                                        lpad=lpad, criteria=material_filter)
-    chunks = chunk_iterable(structures_by_mpid.items(), chunk_size)
-    for chunk in tqdm.tqdm(chunks, total=len(structures_by_mpid) // chunk_size + 1,
-                           desc='Chunks'):
-        if parallel:
-            gwf_args = [(structure, [mpid, 'production_elastic']) 
-                        for mpid, structure in chunk] 
-            pool = Pool(cpu_count())
-            wfs = list(tqdm.tqdm(pool.imap_unordered(pgenerate_workflow, gwf_args), 
-                                                     total=len(gwf_args), desc="Generating fws"))
-            pool.close()
-        else:
-            wfs = [generate_workflow(structure, tags=[mpid, 'production_elastic'])
-                   for mpid, structure in tqdm.tqdm(chunk, desc="Generating fws")]
-        for wf in tqdm.tqdm(wfs, desc="Adding fireworks"):
-            lpad.add_wf(wf)
-    if defuse_existing:
-        defuse_wflows_with_elasticity_data(materials_store, lpad)
-    set_priority(lpad)
-    if test:
-        test_materials = MongoStore.from_db_file(test_mat)
-        test_materials.connect()
-        for mpid in structures_by_mpid:
-            doc = materials_store.collection.find_one({"task_id": mpid})
-            doc['elasticity'] = None
-            test_materials.collection.update({"task_id": mpid}, doc, upsert=True)
+    materials = MongoStore.from_db_file("materials.yaml")
+    elasticity = MongoStore.from_db_file("elasticity.yaml")
+    jhm_mpworks_tasks = MongoStore.from_db_file("jhm_mpworks_tasks.yaml")
+    wc_mpworks_tasks = MongoStore.from_db_file("wc_mpworks_tasks.yaml")
+
+    atomate_tasks = MongoStore.from_db_file("atomate_tasks.yaml")
+    lpad = LaunchPad.from_file(
+        "/Users/josephmontoya/fw_config/config_kpoints/my_launchpad.yaml")
+    ewf_builder = get_elastic_wf_builder(elasticity, materials, lpad)
+
+    wc_mpworks_builder = MPWorksCompatibilityBuilder(wc_mpworks_tasks, atomate_tasks)
+    jhm_mpworks_builder = MPWorksCompatibilityBuilder(jhm_mpworks_tasks, atomate_tasks,
+                                                      incremental=True)
+    elastic_builder = ElasticBuilder(atomate_tasks, elasticity, materials)
+    runner_wc = Runner([wc_mpworks_builder])
+    runner = Runner([jhm_mpworks_builder, elastic_builder, ewf_builder])
+    dumpfn(runner_wc, "wc_runner.json", indent=4)
+    dumpfn(runner, "elastic_wf_builder.json", indent=4)
