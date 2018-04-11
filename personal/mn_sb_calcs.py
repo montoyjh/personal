@@ -11,9 +11,11 @@ Notes:
         generate static workflows to copy vasp outputs
 """
 
-from pymatgen import MPRester, Structure
+from pymatgen import MPRester, Structure, Composition
 from pymatgen.analysis.structure_matcher import StructureMatcher
 from pymatgen.io.vasp.sets import MPStaticSet
+from pymatgen.transformations.advanced_transformations import EnumerateStructureTransformation
+
 import tqdm
 import itertools
 from atomate.utils.utils import get_wf_from_spec_dict
@@ -24,6 +26,7 @@ from fireworks import LaunchPad
 from pymatgen.command_line.bader_caller import *
 from maggma.stores import MongoStore
 from monty.serialization import loadfn
+from copy import deepcopy
 
 import sys
 
@@ -74,6 +77,36 @@ def get_structures_by_template(template, perturbations=1):
 
     return unique_structs
 
+def get_unique_structures(structures, **kwargs):
+    """Gets unique structures from a list of structures using structure matcher"""
+    unique_structs = []
+    structure_matcher = StructureMatcher(**kwargs)
+    for new_struct in tqdm.tqdm(structures, desc='reducing structures'):
+        if not any([structure_matcher.fit(new_struct, struct) for struct in unique_structs]):
+            unique_structs.append(new_struct)
+    return unique_structs
+
+
+def enumerate_all(template):
+    """
+    Generate all enumerations of a particular structure at composition
+    using enumlib
+    """
+    template = template.copy()
+    template.replace_species({"Mn": "Sb"}) # Ensure uniformly Sb
+    indices = [template.index(s) for s in template if s.species_string != 'O']
+    all_structures = []
+    for n in range(len(indices)):
+        combos = itertools.combinations(indices, n)
+        for combo in list(combos):
+            new_structure = template.copy()
+            for idx in combo:
+                new_structure[idx] = "Mn"
+                all_structures.append(new_structure)
+
+    return get_unique_structures(all_structures)
+
+
 def get_all_structs_by_material_id(mp_ids):
     return {mpid[0]: get_structures_by_template(
         mpr.get_structure_by_material_id(mpid[0]), mpid[1])
@@ -91,7 +124,7 @@ def add_bader():
     test_store = MongoStore.from_db_file(os.path.join(module_path, "tasks.yaml"))
     test_store.connect()
     docs = test_store.query(['dir_name', 'task_id'], {"tags": "mn_sb_calcs_4",
-                                                      "task_label": "static", 
+                                                      "task_label": "static",
                                                       "bader": {"$exists": False}})
     for doc in tqdm.tqdm(docs, total=docs.count()):
         run_dir = doc['dir_name'].split(':')[-1]
@@ -105,7 +138,7 @@ def add_bader():
 def get_high_fft_grid_wfs():
     test_store = MongoStore.from_db_file("tasks.yaml")
     test_store.connect()
-    docs = test_store.query(['dir_name', 'output.structure', 'task_id', 'tags'], 
+    docs = test_store.query(['dir_name', 'output.structure', 'task_id', 'tags'],
                             {"tags": "mn_sb_calcs_4", "task_label": "static"})
     wfs = []
     for doc in docs:
@@ -120,7 +153,7 @@ def get_high_fft_grid_wfs():
         wfs.append(wf)
     return wfs
 
-mode = 'add_3_trirutile'
+mode = 'enumerate_disordered_trirutile'
 launch = True
 
 if __name__=="__main__":
@@ -162,18 +195,32 @@ if __name__=="__main__":
         tri_rutile = mpr.get_structure_by_material_id("mp-24845")
         tri_rutile.replace_species({"Co": "Mn"})
         new_structs = get_structures_by_template(tri_rutile, 3)
-        import nose; nose.tools.set_trace()
-        new_structs = [s for s in new_structs if s.reduced_composition == Composition()]
+        new_structs = [s for s in new_structs
+                       if s.composition.reduced_composition ==\
+                       new_structs[-1].composition.reduced_composition]
 
         lpad = LaunchPad.from_file(sys.argv[1])
         wfs = []
-        for mpid, structures in structures.items():
-            for structure in structures:
-                wfs.append(get_opt_static_wf(structure, tags=["mn_sb_calcs_4", mpid]))
+        for structure in new_structs:
+            wfs.append(get_opt_static_wf(structure, tags=["mn_sb_calcs_4", "mp-24845"]))
 
         if launch:
             for wf in wfs:
                 lpad.add_wf(wf)
+
+    # Generating all of the orderings of disordere trirutile
+    elif mode == 'enumerate_disordered_trirutile':
+        struct = mpr.get_structure_by_material_id("mp-24845")
+        new_structs = enumerate_all(struct)
+        lpad = LaunchPad.from_file(sys.argv[1])
+        wfs = []
+        for structure in new_structs:
+            wfs.append(get_opt_static_wf(structure, tags=["mn_sb_calcs_4", "mp-24845"]))
+
+        if launch:
+            for wf in wfs:
+                lpad.add_wf(wf)
+
 
     elif mode == 'do_bader':
         add_bader()
