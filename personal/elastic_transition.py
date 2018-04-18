@@ -108,3 +108,4 @@ if __name__ == "__main__":
     runner = Runner([jhm_mpworks_builder, elastic_builder, ewf_builder])
     dumpfn(runner_wc, "wc_runner.json", indent=4)
     dumpfn(runner, "elastic_wf_builder.json", indent=4)
+    dumpfn(Runner([elastic_builder]), "elastic_builder.json", indent=4)
