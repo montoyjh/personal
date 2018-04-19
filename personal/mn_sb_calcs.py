@@ -103,7 +103,7 @@ def enumerate_all(template):
             for idx in combo:
                 new_structure[idx] = "Mn"
                 all_structures.append(new_structure)
-
+    import nose; nose.tools.set_trace()
     return get_unique_structures(all_structures)
 
 
@@ -199,6 +199,7 @@ if __name__=="__main__":
                        if s.composition.reduced_composition ==\
                        new_structs[-1].composition.reduced_composition]
 
+
         lpad = LaunchPad.from_file(sys.argv[1])
         wfs = []
         for structure in new_structs:
@@ -211,12 +212,16 @@ if __name__=="__main__":
     # Generating all of the orderings of disordere trirutile
     elif mode == 'enumerate_disordered_trirutile':
         struct = mpr.get_structure_by_material_id("mp-24845")
+        struct.replace_species({"Co": "Mn"})
+        import nose; nose.tools.set_trace()
         new_structs = enumerate_all(struct)
         lpad = LaunchPad.from_file(sys.argv[1])
         wfs = []
         for structure in new_structs:
+            assert not "Co" in structure.composition
             wfs.append(get_opt_static_wf(structure, tags=["mn_sb_calcs_4", "mp-24845"]))
 
+        import nose; nose.tools.set_trace()
         if launch:
             for wf in wfs:
                 lpad.add_wf(wf)
